@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
+import { logger } from '../utils/logger.js';
 
 // ===== INTERFACES =====
 export interface WalletAddress {
@@ -9,44 +10,6 @@ export interface WalletAddress {
   createdAt: Date;
 }
 
-export interface IUser extends Document {
-  id: string;
-  email: string;
-  passwordHash: string | null;
-  twoFactorEnabled: boolean;
-  twoFactorSecret: string | null;
-  circleWalletSetId: string | null;
-  walletIds: Record<string, string>;
-  walletAddresses: WalletAddress[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface ITransfer extends Document {
-  id: string;
-  userId: string;
-  sourceChain: string;
-  destinationChain: string;
-  amount: string;
-  status: TransferStatus;
-  burnTxHash: string | null;
-  mintTxHash: string | null;
-  message: string | null;
-  attestation: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export type TransferStatus = 
-  | 'pending'
-  | 'burning'
-  | 'waiting_attestation'
-  | 'ready_to_mint'
-  | 'minting'
-  | 'completed'
-  | 'failed';
-
-// Interfaces para compatibilidade com código existente
 export interface User {
   id: string;
   email: string;
@@ -75,7 +38,16 @@ export interface Transfer {
   updatedAt: Date;
 }
 
-// ===== SCHEMAS =====
+export type TransferStatus = 
+  | 'pending'
+  | 'burning'
+  | 'waiting_attestation'
+  | 'ready_to_mint'
+  | 'minting'
+  | 'completed'
+  | 'failed';
+
+// ===== MONGOOSE SCHEMAS =====
 const WalletAddressSchema = new Schema({
   blockchain: { type: String, required: true },
   address: { type: String, required: true },
@@ -84,183 +56,164 @@ const WalletAddressSchema = new Schema({
 }, { _id: false });
 
 const UserSchema = new Schema({
-  id: { type: String, required: true, unique: true, index: true },
-  email: { type: String, required: true, unique: true, lowercase: true, index: true },
+  id: { type: String, required: true, unique: true },
+  email: { type: String, required: true, unique: true, lowercase: true },
   passwordHash: { type: String, default: null },
   twoFactorEnabled: { type: Boolean, default: false },
   twoFactorSecret: { type: String, default: null },
   circleWalletSetId: { type: String, default: null },
-  walletIds: { type: Map, of: String, default: {} },
-  walletAddresses: { type: [WalletAddressSchema], default: [] }
-}, { 
-  timestamps: true,
-  toJSON: { 
-    transform: (doc, ret) => {
-      ret.walletIds = Object.fromEntries(ret.walletIds || new Map());
-      return ret;
-    }
-  }
+  walletIds: { type: Object, default: {} },
+  walletAddresses: { type: [WalletAddressSchema], default: [] },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
 const TransferSchema = new Schema({
-  id: { type: String, required: true, unique: true, index: true },
+  id: { type: String, required: true, unique: true },
   userId: { type: String, required: true, index: true },
   sourceChain: { type: String, required: true },
   destinationChain: { type: String, required: true },
   amount: { type: String, required: true },
-  status: { 
-    type: String, 
-    enum: ['pending', 'burning', 'waiting_attestation', 'ready_to_mint', 'minting', 'completed', 'failed'],
-    default: 'pending'
-  },
+  status: { type: String, default: 'pending' },
   burnTxHash: { type: String, default: null },
   mintTxHash: { type: String, default: null },
   message: { type: String, default: null },
-  attestation: { type: String, default: null }
-}, { timestamps: true });
+  attestation: { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
 
-// ===== MODELS =====
-const UserModel = mongoose.model<IUser>('User', UserSchema);
-const TransferModel = mongoose.model<ITransfer>('Transfer', TransferSchema);
+// ===== MONGOOSE MODELS =====
+const UserModel = mongoose.model('User', UserSchema);
+const TransferModel = mongoose.model('Transfer', TransferSchema);
+
+// ===== HELPER FUNCTIONS =====
+function docToUser(doc: any): User | undefined {
+  if (!doc) return undefined;
+  return {
+    id: doc.id,
+    email: doc.email,
+    passwordHash: doc.passwordHash,
+    twoFactorEnabled: doc.twoFactorEnabled || false,
+    twoFactorSecret: doc.twoFactorSecret,
+    circleWalletSetId: doc.circleWalletSetId,
+    walletIds: doc.walletIds || {},
+    walletAddresses: (doc.walletAddresses || []).map((wa: any) => ({
+      blockchain: wa.blockchain,
+      address: wa.address,
+      walletId: wa.walletId,
+      createdAt: wa.createdAt
+    })),
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt
+  };
+}
+
+function docToTransfer(doc: any): Transfer | undefined {
+  if (!doc) return undefined;
+  return {
+    id: doc.id,
+    userId: doc.userId,
+    sourceChain: doc.sourceChain,
+    destinationChain: doc.destinationChain,
+    amount: doc.amount,
+    status: doc.status as TransferStatus,
+    burnTxHash: doc.burnTxHash,
+    mintTxHash: doc.mintTxHash,
+    message: doc.message,
+    attestation: doc.attestation,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt
+  };
+}
 
 // ===== USER STORE CLASS =====
 class UserStore {
-  private isConnected: boolean = false;
-
-  async connect(mongoUri: string): Promise<void> {
-    if (this.isConnected) return;
-    
-    try {
-      await mongoose.connect(mongoUri, {
-        dbName: 'fluxshift'
-      });
-      this.isConnected = true;
-      console.log('✅ Connected to MongoDB Atlas');
-      
-      const userCount = await UserModel.countDocuments();
-      const transferCount = await TransferModel.countDocuments();
-      console.log(`✅ Loaded ${userCount} users and ${transferCount} transfers from MongoDB`);
-    } catch (error) {
-      console.error('❌ Failed to connect to MongoDB:', error);
-      throw error;
-    }
-  }
-
-  private toPlainUser(doc: IUser | null): User | undefined {
-    if (!doc) return undefined;
-    const obj = doc.toJSON();
-    return {
-      id: obj.id,
-      email: obj.email,
-      passwordHash: obj.passwordHash,
-      twoFactorEnabled: obj.twoFactorEnabled,
-      twoFactorSecret: obj.twoFactorSecret,
-      circleWalletSetId: obj.circleWalletSetId,
-      walletIds: obj.walletIds || {},
-      walletAddresses: obj.walletAddresses || [],
-      createdAt: obj.createdAt,
-      updatedAt: obj.updatedAt
-    };
-  }
-
-  private toPlainTransfer(doc: ITransfer | null): Transfer | undefined {
-    if (!doc) return undefined;
-    return {
-      id: doc.id,
-      userId: doc.userId,
-      sourceChain: doc.sourceChain,
-      destinationChain: doc.destinationChain,
-      amount: doc.amount,
-      status: doc.status,
-      burnTxHash: doc.burnTxHash,
-      mintTxHash: doc.mintTxHash,
-      message: doc.message,
-      attestation: doc.attestation,
-      createdAt: doc.createdAt,
-      updatedAt: doc.updatedAt
-    };
-  }
-
   async createUser(email: string, passwordHash: string | null = null): Promise<User> {
     const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
     if (existingUser) {
-      return this.toPlainUser(existingUser)!;
+      return docToUser(existingUser)!;
     }
 
     const user = new UserModel({
       id: uuidv4(),
       email: email.toLowerCase(),
-      passwordHash: passwordHash,
+      passwordHash,
       twoFactorEnabled: false,
       twoFactorSecret: null,
       circleWalletSetId: null,
-      walletIds: new Map(),
-      walletAddresses: []
+      walletIds: {},
+      walletAddresses: [],
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
 
     await user.save();
-    console.log(`✅ Created new user: ${email}`);
-    return this.toPlainUser(user)!;
+    logger.info(`✅ Created new user: ${email}`);
+    return docToUser(user)!;
   }
 
   async getUserById(id: string): Promise<User | undefined> {
     const user = await UserModel.findOne({ id });
-    return this.toPlainUser(user);
+    return docToUser(user);
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     const user = await UserModel.findOne({ email: email.toLowerCase() });
-    return this.toPlainUser(user);
+    return docToUser(user);
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
     const user = await UserModel.findOneAndUpdate(
       { id },
-      { $set: updates },
+      { ...updates, updatedAt: new Date() },
       { new: true }
     );
-    return this.toPlainUser(user);
+    return docToUser(user);
   }
 
   async addWalletAddress(userId: string, blockchain: string, address: string, walletId: string): Promise<User | undefined> {
     const user = await UserModel.findOne({ id: userId });
     if (!user) return undefined;
 
-    // Atualiza walletIds
-    user.walletIds.set(blockchain, walletId);
+    // Update walletIds object
+    const walletIds = user.walletIds || {};
+    walletIds[blockchain] = walletId;
+    user.walletIds = walletIds;
 
-    // Atualiza ou adiciona walletAddress
-    const existingIndex = user.walletAddresses.findIndex(wa => wa.blockchain === blockchain);
+    // Find or add wallet address
+    const existingIndex = user.walletAddresses.findIndex((wa: any) => wa.blockchain === blockchain);
     if (existingIndex >= 0) {
       user.walletAddresses[existingIndex] = {
         blockchain,
         address,
         walletId,
         createdAt: user.walletAddresses[existingIndex].createdAt
-      };
+      } as any;
     } else {
       user.walletAddresses.push({
         blockchain,
         address,
         walletId,
         createdAt: new Date()
-      });
+      } as any);
     }
 
+    user.updatedAt = new Date();
     await user.save();
-    return this.toPlainUser(user);
+    return docToUser(user);
   }
 
   async getWalletIdForBlockchain(userId: string, blockchain: string): Promise<string | undefined> {
     const user = await UserModel.findOne({ id: userId });
     if (!user) return undefined;
-    
-    // Primeiro tenta do mapa walletIds
-    const walletId = user.walletIds.get(blockchain);
-    if (walletId) return walletId;
-    
-    // Fallback para walletAddresses
-    const wa = user.walletAddresses.find(w => w.blockchain === blockchain);
+
+    // Try from walletIds object first
+    const walletIds = user.walletIds || {};
+    if (walletIds[blockchain]) return walletIds[blockchain];
+
+    // Fallback to walletAddresses
+    const wa = user.walletAddresses.find((w: any) => w.blockchain === blockchain);
     return wa?.walletId;
   }
 
@@ -275,58 +228,60 @@ class UserStore {
       burnTxHash: null,
       mintTxHash: null,
       message: null,
-      attestation: null
+      attestation: null,
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
 
     await transfer.save();
-    return this.toPlainTransfer(transfer)!;
+    return docToTransfer(transfer)!;
   }
 
   async updateTransfer(id: string, updates: Partial<Transfer>): Promise<Transfer | undefined> {
     const transfer = await TransferModel.findOneAndUpdate(
       { id },
-      { $set: updates },
+      { ...updates, updatedAt: new Date() },
       { new: true }
     );
-    return this.toPlainTransfer(transfer);
+    return docToTransfer(transfer);
   }
 
   async getTransferById(id: string): Promise<Transfer | undefined> {
     const transfer = await TransferModel.findOne({ id });
-    return this.toPlainTransfer(transfer);
+    return docToTransfer(transfer);
   }
 
   async getTransfersByUser(userId: string): Promise<Transfer[]> {
     const transfers = await TransferModel.find({ userId }).sort({ createdAt: -1 });
-    return transfers.map(t => this.toPlainTransfer(t)!);
+    return transfers.map(t => docToTransfer(t)!).filter(Boolean);
   }
 
   async getPendingTransfers(userId: string): Promise<Transfer[]> {
-    const transfers = await TransferModel.find({ 
-      userId, 
+    const transfers = await TransferModel.find({
+      userId,
       status: { $nin: ['completed', 'failed'] }
     }).sort({ createdAt: -1 });
-    return transfers.map(t => this.toPlainTransfer(t)!);
+    return transfers.map(t => docToTransfer(t)!).filter(Boolean);
   }
 
   async getCompletedTransfers(userId: string): Promise<Transfer[]> {
-    const transfers = await TransferModel.find({ 
-      userId, 
+    const transfers = await TransferModel.find({
+      userId,
       status: { $in: ['completed', 'failed'] }
     }).sort({ createdAt: -1 });
-    return transfers.map(t => this.toPlainTransfer(t)!);
+    return transfers.map(t => docToTransfer(t)!).filter(Boolean);
   }
 
   async getAllUsers(): Promise<User[]> {
-    const users = await UserModel.find();
-    return users.map(u => this.toPlainUser(u)!);
+    const users = await UserModel.find({});
+    return users.map(u => docToUser(u)!).filter(Boolean);
   }
 
   // ===== 2FA OPERATIONS =====
   async setTwoFactorSecret(userId: string, secret: string): Promise<boolean> {
     const result = await UserModel.updateOne(
       { id: userId },
-      { $set: { twoFactorSecret: secret } }
+      { twoFactorSecret: secret, updatedAt: new Date() }
     );
     return result.modifiedCount > 0;
   }
@@ -334,10 +289,10 @@ class UserStore {
   async enableTwoFactor(userId: string): Promise<boolean> {
     const user = await UserModel.findOne({ id: userId });
     if (!user || !user.twoFactorSecret) return false;
-    
+
     const result = await UserModel.updateOne(
       { id: userId },
-      { $set: { twoFactorEnabled: true } }
+      { twoFactorEnabled: true, updatedAt: new Date() }
     );
     return result.modifiedCount > 0;
   }
@@ -345,7 +300,7 @@ class UserStore {
   async disableTwoFactor(userId: string): Promise<boolean> {
     const result = await UserModel.updateOne(
       { id: userId },
-      { $set: { twoFactorEnabled: false, twoFactorSecret: null } }
+      { twoFactorEnabled: false, twoFactorSecret: null, updatedAt: new Date() }
     );
     return result.modifiedCount > 0;
   }
@@ -353,7 +308,7 @@ class UserStore {
   async updatePassword(userId: string, passwordHash: string): Promise<boolean> {
     const result = await UserModel.updateOne(
       { id: userId },
-      { $set: { passwordHash } }
+      { passwordHash, updatedAt: new Date() }
     );
     return result.modifiedCount > 0;
   }

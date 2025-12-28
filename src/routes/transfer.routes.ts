@@ -125,7 +125,7 @@ router.post('/:transferId/complete', async (req: Request, res: Response) => {
       });
     }
 
-    const transfer = userService.getTransfer(transferId);
+    const transfer = await userService.getTransfer(transferId);
     if (!transfer) {
       return res.status(404).json({
         success: false,
