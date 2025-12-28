@@ -29,7 +29,7 @@ router.get('/chains', (req: Request, res: Response) => {
 router.get('/:userId/addresses', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const addresses = userService.getAllWalletAddresses(userId);
+    const addresses = await userService.getAllWalletAddresses(userId);
 
     if (addresses.length === 0) {
       return res.status(404).json({
@@ -55,7 +55,7 @@ router.get('/:userId/addresses', async (req: Request, res: Response) => {
 router.get('/:userId/balances', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -122,7 +122,7 @@ router.get('/:userId/balance/:chainKey', async (req: Request, res: Response) => 
       });
     }
 
-    const address = userService.getWalletAddress(userId, chain.circleBlockchain);
+    const address = await userService.getWalletAddress(userId, chain.circleBlockchain);
 
     if (!address) {
       return res.status(404).json({
@@ -189,7 +189,7 @@ router.post('/withdraw', async (req: Request, res: Response) => {
       });
     }
 
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -198,7 +198,7 @@ router.post('/withdraw', async (req: Request, res: Response) => {
     }
 
     // Pegar walletId para a chain específica
-    const walletId = userService.getWalletIdForChainKey(userId, chainKey);
+    const walletId = await userService.getWalletIdForChainKey(userId, chainKey);
     if (!walletId) {
       return res.status(404).json({
         success: false,

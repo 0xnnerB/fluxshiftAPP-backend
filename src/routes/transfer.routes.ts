@@ -18,7 +18,7 @@ router.post('/bridge', async (req: Request, res: Response) => {
       });
     }
 
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -63,7 +63,7 @@ router.post('/bridge-auto', async (req: Request, res: Response) => {
       });
     }
 
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -125,7 +125,7 @@ router.post('/:transferId/complete', async (req: Request, res: Response) => {
       });
     }
 
-    const transfer = userService.getTransfer(transferId);
+    const transfer = await userService.getTransfer(transferId);
     if (!transfer) {
       return res.status(404).json({
         success: false,
@@ -164,7 +164,7 @@ router.post('/:transferId/complete', async (req: Request, res: Response) => {
 router.get('/user/:userId/history', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const history = userService.getTransferHistory(userId);
+    const history = await userService.getTransferHistory(userId);
 
     res.json({
       success: true,

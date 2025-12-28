@@ -11,7 +11,7 @@ export interface CreateUserResponse {
 
 class UserService {
   async createUser(email: string, passwordHash: string | null = null): Promise<CreateUserResponse> {
-    const existingUser = userStore.getUserByEmail(email);
+    const existingUser = await userStore.getUserByEmail(email);
     
     if (existingUser) {
       logger.info(`User already exists: ${email}`);
@@ -35,14 +35,14 @@ class UserService {
           
           for (const wallet of walletsResult.wallets) {
             if (wallet.address && wallet.walletId) {
-              userStore.addWalletAddress(existingUser.id, wallet.blockchain, wallet.address, wallet.walletId);
+              await userStore.addWalletAddress(existingUser.id, wallet.blockchain, wallet.address, wallet.walletId);
             }
           }
           
-          const updatedUser = userStore.getUserById(existingUser.id)!;
+          const updatedUser = await userStore.getUserById(existingUser.id);
           return {
-            user: updatedUser,
-            wallets: updatedUser.walletAddresses.map(wa => ({
+            user: updatedUser!,
+            wallets: updatedUser!.walletAddresses.map(wa => ({
               blockchain: wa.blockchain,
               address: wa.address,
             })),
@@ -62,30 +62,30 @@ class UserService {
       }
     }
 
-    const user = existingUser || userStore.createUser(email, passwordHash);
+    const user = existingUser || await userStore.createUser(email, passwordHash);
 
     try {
       logger.info(`Creating new wallets for: ${email}`);
       const walletsResult = await circleWalletService.createUserWallets();
 
-      userStore.updateUser(user.id, {
+      await userStore.updateUser(user.id, {
         circleWalletSetId: walletsResult.walletSetId,
       });
 
       // Salva cada wallet com seu respectivo walletId
       for (const wallet of walletsResult.wallets) {
         if (wallet.address && wallet.walletId) {
-          userStore.addWalletAddress(user.id, wallet.blockchain, wallet.address, wallet.walletId);
+          await userStore.addWalletAddress(user.id, wallet.blockchain, wallet.address, wallet.walletId);
         }
       }
 
-      const updatedUser = userStore.getUserById(user.id)!;
+      const updatedUser = await userStore.getUserById(user.id);
 
       logger.info(`Created user ${email} with ${walletsResult.wallets.length} wallets`);
 
       return {
-        user: updatedUser,
-        wallets: updatedUser.walletAddresses.map(wa => ({
+        user: updatedUser!,
+        wallets: updatedUser!.walletAddresses.map(wa => ({
           blockchain: wa.blockchain,
           address: wa.address,
         })),
@@ -97,16 +97,16 @@ class UserService {
     }
   }
 
-  getUser(userId: string): User | undefined {
-    return userStore.getUserById(userId);
+  async getUser(userId: string): Promise<User | undefined> {
+    return await userStore.getUserById(userId);
   }
 
-  getUserByEmail(email: string): User | undefined {
-    return userStore.getUserByEmail(email);
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return await userStore.getUserByEmail(email);
   }
 
-  getWalletAddress(userId: string, blockchain: string): string | undefined {
-    const user = userStore.getUserById(userId);
+  async getWalletAddress(userId: string, blockchain: string): Promise<string | undefined> {
+    const user = await userStore.getUserById(userId);
     if (!user) return undefined;
 
     const walletAddress = user.walletAddresses.find(wa => wa.blockchain === blockchain);
@@ -114,19 +114,19 @@ class UserService {
   }
 
   // NOVO: Retorna o walletId para uma blockchain específica
-  getWalletIdForBlockchain(userId: string, blockchain: string): string | undefined {
-    return userStore.getWalletIdForBlockchain(userId, blockchain);
+  async getWalletIdForBlockchain(userId: string, blockchain: string): Promise<string | undefined> {
+    return await userStore.getWalletIdForBlockchain(userId, blockchain);
   }
 
   // NOVO: Retorna o walletId para um chainKey (ex: ETH_SEPOLIA)
-  getWalletIdForChainKey(userId: string, chainKey: string): string | undefined {
+  async getWalletIdForChainKey(userId: string, chainKey: string): Promise<string | undefined> {
     const chain = CHAINS[chainKey];
     if (!chain) return undefined;
-    return userStore.getWalletIdForBlockchain(userId, chain.circleBlockchain);
+    return await userStore.getWalletIdForBlockchain(userId, chain.circleBlockchain);
   }
 
-  getAllWalletAddresses(userId: string): Array<{ blockchain: string; address: string }> {
-    const user = userStore.getUserById(userId);
+  async getAllWalletAddresses(userId: string): Promise<Array<{ blockchain: string; address: string }>> {
+    const user = await userStore.getUserById(userId);
     if (!user) return [];
 
     return user.walletAddresses.map(wa => ({
@@ -135,19 +135,19 @@ class UserService {
     }));
   }
 
-  getTransferHistory(userId: string): { pending: Transfer[]; completed: Transfer[] } {
+  async getTransferHistory(userId: string): Promise<{ pending: Transfer[]; completed: Transfer[] }> {
     return {
-      pending: userStore.getPendingTransfers(userId),
-      completed: userStore.getCompletedTransfers(userId),
+      pending: await userStore.getPendingTransfers(userId),
+      completed: await userStore.getCompletedTransfers(userId),
     };
   }
 
-  getTransfer(transferId: string): Transfer | undefined {
-    return userStore.getTransferById(transferId);
+  async getTransfer(transferId: string): Promise<Transfer | undefined> {
+    return await userStore.getTransferById(transferId);
   }
 
-  listAllUsers(): User[] {
-    return userStore.getAllUsers();
+  async listAllUsers(): Promise<User[]> {
+    return await userStore.getAllUsers();
   }
 }
 

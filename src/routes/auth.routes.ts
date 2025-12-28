@@ -55,7 +55,7 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 
     // Check if user exists
-    const existing = userService.getUserByEmail(email);
+    const existing = await userService.getUserByEmail(email);
     if (existing) {
       return res.status(400).json({
         success: false,
@@ -102,7 +102,7 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    const user = userService.getUserByEmail(email);
+    const user = await userService.getUserByEmail(email);
 
     if (!user) {
       return res.status(404).json({
@@ -183,7 +183,7 @@ router.post('/2fa/setup', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'User ID required' });
     }
 
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -192,7 +192,7 @@ router.post('/2fa/setup', async (req: Request, res: Response) => {
     const otpauthUrl = authenticator.keyuri(user.email, 'FluxShift', secret);
 
     // Save secret temporarily
-    userStore.setTwoFactorSecret(userId, secret);
+    await userStore.setTwoFactorSecret(userId, secret);
 
     // Generate QR code
     const qrCodeUrl = await QRCode.toDataURL(otpauthUrl);
@@ -219,7 +219,7 @@ router.post('/2fa/verify', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'User ID and code required' });
     }
 
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
     if (!user || !user.twoFactorSecret) {
       return res.status(400).json({ success: false, message: '2FA not set up' });
     }
@@ -230,7 +230,7 @@ router.post('/2fa/verify', async (req: Request, res: Response) => {
     });
 
     if (isValid) {
-      userStore.enableTwoFactor(userId);
+      await userStore.enableTwoFactor(userId);
       logger.info(`2FA enabled for: ${user.email}`);
       res.json({ success: true, message: '2FA enabled successfully' });
     } else {
@@ -251,7 +251,7 @@ router.post('/2fa/disable', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'User ID and code required' });
     }
 
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
     if (!user || !user.twoFactorEnabled) {
       return res.status(400).json({ success: false, message: '2FA not enabled' });
     }
@@ -262,7 +262,7 @@ router.post('/2fa/disable', async (req: Request, res: Response) => {
     });
 
     if (isValid) {
-      userStore.disableTwoFactor(userId);
+      await userStore.disableTwoFactor(userId);
       logger.info(`2FA disabled for: ${user.email}`);
       res.json({ success: true, message: '2FA disabled successfully' });
     } else {
@@ -278,7 +278,7 @@ router.post('/2fa/disable', async (req: Request, res: Response) => {
 router.get('/user/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const user = userService.getUser(userId);
+    const user = await userService.getUser(userId);
 
     if (!user) {
       return res.status(404).json({

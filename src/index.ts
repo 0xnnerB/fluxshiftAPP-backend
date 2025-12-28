@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { logger } from './utils/logger.js';
+import { connectDatabase } from './config/database.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import authRoutes from './routes/auth.routes.js';
 import walletRoutes from './routes/wallet.routes.js';
@@ -67,11 +68,22 @@ app.use('/api/transfer', transferRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Start server
-app.listen(PORT, () => {
-  logger.info(`🚀 FluxShift Backend running on port ${PORT}`);
-  logger.info(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.info(`🔗 Health check: http://localhost:${PORT}/health`);
-});
+// Connect to MongoDB and start server
+async function startServer() {
+  try {
+    await connectDatabase();
+    
+    app.listen(PORT, () => {
+      logger.info(`🚀 FluxShift Backend running on port ${PORT}`);
+      logger.info(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info(`🔗 Health check: http://localhost:${PORT}/health`);
+    });
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 export default app;

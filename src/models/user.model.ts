@@ -1,33 +1,26 @@
+import mongoose, { Schema } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { logger } from '../utils/logger.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const DATA_FILE = path.join(__dirname, '../../data/users.json');
-const DATA_DIR = path.join(__dirname, '../../data');
+// ===== INTERFACES =====
+export interface WalletAddress {
+  blockchain: string;
+  address: string;
+  walletId: string;
+  createdAt: Date;
+}
 
 export interface User {
   id: string;
   email: string;
-  passwordHash: string | null;  // Hash bcrypt da senha
-  twoFactorEnabled: boolean;    // 2FA ativado?
-  twoFactorSecret: string | null; // Secret TOTP
+  passwordHash: string | null;
+  twoFactorEnabled: boolean;
+  twoFactorSecret: string | null;
   circleWalletSetId: string | null;
-  // Mapa de blockchain -> walletId (cada chain tem seu próprio walletId!)
   walletIds: Record<string, string>;
   walletAddresses: WalletAddress[];
   createdAt: Date;
   updatedAt: Date;
-}
-
-export interface WalletAddress {
-  blockchain: string;
-  address: string;
-  walletId: string;  // Agora cada address tem seu walletId associado
-  createdAt: Date;
 }
 
 export interface Transfer {
@@ -54,186 +47,171 @@ export type TransferStatus =
   | 'completed'
   | 'failed';
 
-interface StorageData {
-  users: Record<string, User>;
-  usersByEmail: Record<string, string>;
-  transfers: Record<string, Transfer>;
-  transfersByUser: Record<string, string[]>;
+// ===== MONGOOSE SCHEMAS =====
+const WalletAddressSchema = new Schema({
+  blockchain: { type: String, required: true },
+  address: { type: String, required: true },
+  walletId: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const UserSchema = new Schema({
+  id: { type: String, required: true, unique: true },
+  email: { type: String, required: true, unique: true, lowercase: true },
+  passwordHash: { type: String, default: null },
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorSecret: { type: String, default: null },
+  circleWalletSetId: { type: String, default: null },
+  walletIds: { type: Map, of: String, default: {} },
+  walletAddresses: { type: [WalletAddressSchema], default: [] },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const TransferSchema = new Schema({
+  id: { type: String, required: true, unique: true },
+  userId: { type: String, required: true, index: true },
+  sourceChain: { type: String, required: true },
+  destinationChain: { type: String, required: true },
+  amount: { type: String, required: true },
+  status: { type: String, default: 'pending' },
+  burnTxHash: { type: String, default: null },
+  mintTxHash: { type: String, default: null },
+  message: { type: String, default: null },
+  attestation: { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+// ===== MONGOOSE MODELS =====
+const UserModel = mongoose.model('User', UserSchema);
+const TransferModel = mongoose.model('Transfer', TransferSchema);
+
+// ===== HELPER FUNCTIONS =====
+function docToUser(doc: any): User {
+  if (!doc) return doc;
+  return {
+    id: doc.id,
+    email: doc.email,
+    passwordHash: doc.passwordHash,
+    twoFactorEnabled: doc.twoFactorEnabled,
+    twoFactorSecret: doc.twoFactorSecret,
+    circleWalletSetId: doc.circleWalletSetId,
+    walletIds: doc.walletIds instanceof Map ? Object.fromEntries(doc.walletIds) : (doc.walletIds || {}),
+    walletAddresses: doc.walletAddresses || [],
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt
+  };
 }
 
+function docToTransfer(doc: any): Transfer {
+  if (!doc) return doc;
+  return {
+    id: doc.id,
+    userId: doc.userId,
+    sourceChain: doc.sourceChain,
+    destinationChain: doc.destinationChain,
+    amount: doc.amount,
+    status: doc.status,
+    burnTxHash: doc.burnTxHash,
+    mintTxHash: doc.mintTxHash,
+    message: doc.message,
+    attestation: doc.attestation,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt
+  };
+}
+
+// ===== USER STORE CLASS =====
 class UserStore {
-  private users: Map<string, User> = new Map();
-  private usersByEmail: Map<string, string> = new Map();
-  private transfers: Map<string, Transfer> = new Map();
-  private transfersByUser: Map<string, string[]> = new Map();
-
-  constructor() {
-    this.loadFromFile();
-  }
-
-  private ensureDataDir(): void {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-  }
-
-  private loadFromFile(): void {
-    try {
-      this.ensureDataDir();
-      
-      if (fs.existsSync(DATA_FILE)) {
-        const data = fs.readFileSync(DATA_FILE, 'utf-8');
-        const parsed: StorageData = JSON.parse(data);
-        
-        for (const [id, user] of Object.entries(parsed.users || {})) {
-          user.createdAt = new Date(user.createdAt);
-          user.updatedAt = new Date(user.updatedAt);
-          user.walletIds = user.walletIds || {};
-          user.walletAddresses = (user.walletAddresses || []).map(wa => ({
-            ...wa,
-            walletId: wa.walletId || '',
-            createdAt: new Date(wa.createdAt)
-          }));
-          this.users.set(id, user);
-        }
-        
-        for (const [email, id] of Object.entries(parsed.usersByEmail || {})) {
-          this.usersByEmail.set(email, id);
-        }
-        
-        for (const [id, transfer] of Object.entries(parsed.transfers || {})) {
-          transfer.createdAt = new Date(transfer.createdAt);
-          transfer.updatedAt = new Date(transfer.updatedAt);
-          this.transfers.set(id, transfer);
-        }
-        
-        for (const [userId, transferIds] of Object.entries(parsed.transfersByUser || {})) {
-          this.transfersByUser.set(userId, transferIds);
-        }
-        
-        console.log(`✅ Loaded ${this.users.size} users and ${this.transfers.size} transfers from storage`);
-      }
-    } catch (error) {
-      console.error('Failed to load data from file:', error);
-    }
-  }
-
-  private saveToFile(): void {
-    try {
-      this.ensureDataDir();
-      
-      const data: StorageData = {
-        users: Object.fromEntries(this.users),
-        usersByEmail: Object.fromEntries(this.usersByEmail),
-        transfers: Object.fromEntries(this.transfers),
-        transfersByUser: Object.fromEntries(this.transfersByUser),
-      };
-      
-      fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-    } catch (error) {
-      console.error('Failed to save data to file:', error);
-    }
-  }
-
-  createUser(email: string, passwordHash: string | null = null): User {
-    const existingUserId = this.usersByEmail.get(email.toLowerCase());
-    if (existingUserId) {
-      const existingUser = this.users.get(existingUserId);
-      if (existingUser) {
-        return existingUser;
-      }
+  async createUser(email: string, passwordHash: string | null = null): Promise<User> {
+    const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
+    if (existingUser) {
+      return docToUser(existingUser);
     }
 
-    const user: User = {
+    const user = new UserModel({
       id: uuidv4(),
       email: email.toLowerCase(),
-      passwordHash: passwordHash,
+      passwordHash,
       twoFactorEnabled: false,
       twoFactorSecret: null,
       circleWalletSetId: null,
       walletIds: {},
       walletAddresses: [],
       createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+      updatedAt: new Date()
+    });
 
-    this.users.set(user.id, user);
-    this.usersByEmail.set(user.email, user.id);
-    this.saveToFile();
-    return user;
+    await user.save();
+    logger.info(`✅ Created new user: ${email}`);
+    return docToUser(user);
   }
 
-  getUserById(id: string): User | undefined {
-    return this.users.get(id);
+  async getUserById(id: string): Promise<User | undefined> {
+    const user = await UserModel.findOne({ id });
+    return user ? docToUser(user) : undefined;
   }
 
-  getUserByEmail(email: string): User | undefined {
-    const userId = this.usersByEmail.get(email.toLowerCase());
-    if (!userId) return undefined;
-    return this.users.get(userId);
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const user = await UserModel.findOne({ email: email.toLowerCase() });
+    return user ? docToUser(user) : undefined;
   }
 
-  updateUser(id: string, updates: Partial<User>): User | undefined {
-    const user = this.users.get(id);
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const user = await UserModel.findOneAndUpdate(
+      { id },
+      { ...updates, updatedAt: new Date() },
+      { new: true }
+    );
+    return user ? docToUser(user) : undefined;
+  }
+
+  async addWalletAddress(userId: string, blockchain: string, address: string, walletId: string): Promise<User | undefined> {
+    const user = await UserModel.findOne({ id: userId });
     if (!user) return undefined;
 
-    const updatedUser = {
-      ...user,
-      ...updates,
-      updatedAt: new Date(),
-    };
-    this.users.set(id, updatedUser);
-    this.saveToFile();
-    return updatedUser;
-  }
+    // Update walletIds map
+    user.walletIds.set(blockchain, walletId);
 
-  addWalletAddress(userId: string, blockchain: string, address: string, walletId: string): User | undefined {
-    const user = this.users.get(userId);
-    if (!user) return undefined;
-
-    // Atualiza o mapa walletIds
-    user.walletIds[blockchain] = walletId;
-
-    const existingIndex = user.walletAddresses.findIndex(wa => wa.blockchain === blockchain);
-
+    // Find or add wallet address
+    const existingIndex = user.walletAddresses.findIndex((wa: any) => wa.blockchain === blockchain);
     if (existingIndex >= 0) {
       user.walletAddresses[existingIndex] = {
         blockchain,
         address,
         walletId,
-        createdAt: user.walletAddresses[existingIndex].createdAt,
+        createdAt: user.walletAddresses[existingIndex].createdAt
       };
     } else {
       user.walletAddresses.push({
         blockchain,
         address,
         walletId,
-        createdAt: new Date(),
+        createdAt: new Date()
       });
     }
 
     user.updatedAt = new Date();
-    this.users.set(userId, user);
-    this.saveToFile();
-    return user;
+    await user.save();
+    return docToUser(user);
   }
 
-  getWalletIdForBlockchain(userId: string, blockchain: string): string | undefined {
-    const user = this.users.get(userId);
+  async getWalletIdForBlockchain(userId: string, blockchain: string): Promise<string | undefined> {
+    const user = await UserModel.findOne({ id: userId });
     if (!user) return undefined;
-    
-    // Primeiro tenta do mapa walletIds
-    if (user.walletIds[blockchain]) {
-      return user.walletIds[blockchain];
-    }
-    
-    // Fallback para walletAddresses
-    const wa = user.walletAddresses.find(w => w.blockchain === blockchain);
+
+    // Try from walletIds map first
+    const walletIdFromMap = user.walletIds.get(blockchain);
+    if (walletIdFromMap) return walletIdFromMap;
+
+    // Fallback to walletAddresses
+    const wa = user.walletAddresses.find((w: any) => w.blockchain === blockchain);
     return wa?.walletId;
   }
 
-  createTransfer(userId: string, sourceChain: string, destinationChain: string, amount: string): Transfer {
-    const transfer: Transfer = {
+  async createTransfer(userId: string, sourceChain: string, destinationChain: string, amount: string): Promise<Transfer> {
+    const transfer = new TransferModel({
       id: uuidv4(),
       userId,
       sourceChain,
@@ -245,97 +223,87 @@ class UserStore {
       message: null,
       attestation: null,
       createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+      updatedAt: new Date()
+    });
 
-    this.transfers.set(transfer.id, transfer);
-    
-    const userTransfers = this.transfersByUser.get(userId) || [];
-    userTransfers.push(transfer.id);
-    this.transfersByUser.set(userId, userTransfers);
-    
-    this.saveToFile();
-    return transfer;
+    await transfer.save();
+    return docToTransfer(transfer);
   }
 
-  updateTransfer(id: string, updates: Partial<Transfer>): Transfer | undefined {
-    const transfer = this.transfers.get(id);
-    if (!transfer) return undefined;
-
-    const updatedTransfer = {
-      ...transfer,
-      ...updates,
-      updatedAt: new Date(),
-    };
-    this.transfers.set(id, updatedTransfer);
-    this.saveToFile();
-    return updatedTransfer;
-  }
-
-  getTransferById(id: string): Transfer | undefined {
-    return this.transfers.get(id);
-  }
-
-  getTransfersByUser(userId: string): Transfer[] {
-    const transferIds = this.transfersByUser.get(userId) || [];
-    return transferIds
-      .map(id => this.transfers.get(id))
-      .filter((t): t is Transfer => t !== undefined)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  getPendingTransfers(userId: string): Transfer[] {
-    return this.getTransfersByUser(userId).filter(
-      t => t.status !== 'completed' && t.status !== 'failed'
+  async updateTransfer(id: string, updates: Partial<Transfer>): Promise<Transfer | undefined> {
+    const transfer = await TransferModel.findOneAndUpdate(
+      { id },
+      { ...updates, updatedAt: new Date() },
+      { new: true }
     );
+    return transfer ? docToTransfer(transfer) : undefined;
   }
 
-  getCompletedTransfers(userId: string): Transfer[] {
-    return this.getTransfersByUser(userId).filter(
-      t => t.status === 'completed' || t.status === 'failed'
-    );
+  async getTransferById(id: string): Promise<Transfer | undefined> {
+    const transfer = await TransferModel.findOne({ id });
+    return transfer ? docToTransfer(transfer) : undefined;
   }
 
-  getAllUsers(): User[] {
-    return Array.from(this.users.values());
+  async getTransfersByUser(userId: string): Promise<Transfer[]> {
+    const transfers = await TransferModel.find({ userId }).sort({ createdAt: -1 });
+    return transfers.map(docToTransfer);
+  }
+
+  async getPendingTransfers(userId: string): Promise<Transfer[]> {
+    const transfers = await TransferModel.find({
+      userId,
+      status: { $nin: ['completed', 'failed'] }
+    }).sort({ createdAt: -1 });
+    return transfers.map(docToTransfer);
+  }
+
+  async getCompletedTransfers(userId: string): Promise<Transfer[]> {
+    const transfers = await TransferModel.find({
+      userId,
+      status: { $in: ['completed', 'failed'] }
+    }).sort({ createdAt: -1 });
+    return transfers.map(docToTransfer);
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    const users = await UserModel.find({});
+    return users.map(docToUser);
   }
 
   // ===== 2FA OPERATIONS =====
-  setTwoFactorSecret(userId: string, secret: string): boolean {
-    const user = this.users.get(userId);
-    if (!user) return false;
-    user.twoFactorSecret = secret;
-    user.updatedAt = new Date();
-    this.saveToFile();
-    return true;
+  async setTwoFactorSecret(userId: string, secret: string): Promise<boolean> {
+    const result = await UserModel.updateOne(
+      { id: userId },
+      { twoFactorSecret: secret, updatedAt: new Date() }
+    );
+    return result.modifiedCount > 0;
   }
 
-  enableTwoFactor(userId: string): boolean {
-    const user = this.users.get(userId);
+  async enableTwoFactor(userId: string): Promise<boolean> {
+    const user = await UserModel.findOne({ id: userId });
     if (!user || !user.twoFactorSecret) return false;
-    user.twoFactorEnabled = true;
-    user.updatedAt = new Date();
-    this.saveToFile();
-    return true;
+
+    const result = await UserModel.updateOne(
+      { id: userId },
+      { twoFactorEnabled: true, updatedAt: new Date() }
+    );
+    return result.modifiedCount > 0;
   }
 
-  disableTwoFactor(userId: string): boolean {
-    const user = this.users.get(userId);
-    if (!user) return false;
-    user.twoFactorEnabled = false;
-    user.twoFactorSecret = null;
-    user.updatedAt = new Date();
-    this.saveToFile();
-    return true;
+  async disableTwoFactor(userId: string): Promise<boolean> {
+    const result = await UserModel.updateOne(
+      { id: userId },
+      { twoFactorEnabled: false, twoFactorSecret: null, updatedAt: new Date() }
+    );
+    return result.modifiedCount > 0;
   }
 
-  updatePassword(userId: string, passwordHash: string): boolean {
-    const user = this.users.get(userId);
-    if (!user) return false;
-    user.passwordHash = passwordHash;
-    user.updatedAt = new Date();
-    this.saveToFile();
-    return true;
+  async updatePassword(userId: string, passwordHash: string): Promise<boolean> {
+    const result = await UserModel.updateOne(
+      { id: userId },
+      { passwordHash, updatedAt: new Date() }
+    );
+    return result.modifiedCount > 0;
   }
 }
 
