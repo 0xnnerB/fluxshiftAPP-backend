@@ -7,11 +7,11 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { logger } from './utils/logger.js';
-import { connectDatabase } from './config/database.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import authRoutes from './routes/auth.routes.js';
 import walletRoutes from './routes/wallet.routes.js';
 import transferRoutes from './routes/transfer.routes.js';
+import { userStore } from './models/user.model.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -71,7 +71,12 @@ app.use(errorHandler);
 // Connect to MongoDB and start server
 async function startServer() {
   try {
-    await connectDatabase();
+    const mongoUri = process.env.MONGODB_URI;
+    if (!mongoUri) {
+      throw new Error('MONGODB_URI environment variable is required');
+    }
+    
+    await userStore.connect(mongoUri);
     
     app.listen(PORT, () => {
       logger.info(`🚀 FluxShift Backend running on port ${PORT}`);

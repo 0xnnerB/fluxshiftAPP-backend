@@ -1,7 +1,7 @@
 {
   "name": "fluxshift-backend",
-  "version": "6.0.0",
-  "description": "FluxShift Backend - Circle Wallets & CCTP v2 + Security",
+  "version": "6.1.0",
+  "description": "FluxShift Backend - Circle Wallets & CCTP v2 + Security + MongoDB",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

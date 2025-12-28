@@ -125,17 +125,17 @@ class CCTPService {
     }
 
     // CORREÇÃO: Pega o walletId da SOURCE chain para fazer burn
-    const sourceWalletId = userService.getWalletIdForChainKey(userId, sourceChainKey);
+    const sourceWalletId = await userService.getWalletIdForChainKey(userId, sourceChainKey);
     if (!sourceWalletId) {
       throw new Error(`No wallet found for source chain: ${sourceChainKey}`);
     }
 
-    const transfer = userStore.createTransfer(userId, sourceChainKey, destChainKey, amount);
+    const transfer = await userStore.createTransfer(userId, sourceChainKey, destChainKey, amount);
 
     try {
-      userStore.updateTransfer(transfer.id, { status: 'burning' });
+      await userStore.updateTransfer(transfer.id, { status: 'burning' });
 
-      const user = userStore.getUserById(userId);
+      const user = await userStore.getUserById(userId);
       const destAddress = recipientAddress || 
         user?.walletAddresses.find(wa => wa.blockchain === destChain.circleBlockchain)?.address;
 
@@ -190,7 +190,7 @@ class CCTPService {
       const burnTx = await circleWalletService.waitForTransaction(burnResult.transaction.id);
       const burnTxHash = burnTx.transaction.txHash || null;
       
-      userStore.updateTransfer(transfer.id, { status: 'waiting_attestation', burnTxHash });
+      await userStore.updateTransfer(transfer.id, { status: 'waiting_attestation', burnTxHash });
 
       logger.info(`Bridge burn completed: ${burnTxHash}`);
 
@@ -201,7 +201,7 @@ class CCTPService {
       };
     } catch (error: any) {
       logger.error('Bridge initiation failed:', error);
-      userStore.updateTransfer(transfer.id, { status: 'failed' });
+      await userStore.updateTransfer(transfer.id, { status: 'failed' });
       throw error;
     }
   }
@@ -251,7 +251,7 @@ class CCTPService {
     message: string,
     attestation: string
   ): Promise<{ mintTxHash: string }> {
-    const transfer = userStore.getTransferById(transferId);
+    const transfer = await userStore.getTransferById(transferId);
     if (!transfer) {
       throw new Error('Transfer not found');
     }
@@ -268,13 +268,13 @@ class CCTPService {
     }
 
     // CORREÇÃO: Pega o walletId da DESTINATION chain para fazer mint
-    const destWalletId = userService.getWalletIdForChainKey(userId, transfer.destinationChain);
+    const destWalletId = await userService.getWalletIdForChainKey(userId, transfer.destinationChain);
     if (!destWalletId) {
       throw new Error(`No wallet found for destination chain: ${transfer.destinationChain}`);
     }
 
     try {
-      userStore.updateTransfer(transferId, { status: 'minting' });
+      await userStore.updateTransfer(transferId, { status: 'minting' });
 
       logger.info(`Step 4: Minting USDC on ${destChain.name}...`);
       logger.info(`Destination chain key: ${transfer.destinationChain}`);
@@ -295,7 +295,7 @@ class CCTPService {
       const mintTx = await circleWalletService.waitForTransaction(mintResult.transaction.id);
       const mintTxHash = mintTx.transaction.txHash || '';
 
-      userStore.updateTransfer(transferId, { status: 'completed', mintTxHash, message, attestation });
+      await userStore.updateTransfer(transferId, { status: 'completed', mintTxHash, message, attestation });
 
       logger.info(`Bridge completed: ${mintTxHash}`);
 
@@ -308,13 +308,13 @@ class CCTPService {
         logger.warn('Message may have been already processed');
       }
       
-      userStore.updateTransfer(transferId, { status: 'failed' });
+      await userStore.updateTransfer(transferId, { status: 'failed' });
       throw error;
     }
   }
 
   async getBridgeStatus(transferId: string): Promise<BridgeStatusResult> {
-    const transfer = userStore.getTransferById(transferId);
+    const transfer = await userStore.getTransferById(transferId);
     if (!transfer) {
       throw new Error('Transfer not found');
     }
@@ -326,23 +326,23 @@ class CCTPService {
           const attestation = await this.checkAttestation(transfer.burnTxHash, sourceChain.cctpDomain);
 
           if (attestation && attestation.messages[0]?.status === 'complete') {
-            userStore.updateTransfer(transferId, {
+            await userStore.updateTransfer(transferId, {
               status: 'ready_to_mint',
               message: attestation.messages[0].message,
               attestation: attestation.messages[0].attestation,
             });
             
-            const updatedTransfer = userStore.getTransferById(transferId)!;
+            const updatedTransfer = await userStore.getTransferById(transferId);
             return {
-              transferId: updatedTransfer.id,
-              status: updatedTransfer.status,
-              burnTxHash: updatedTransfer.burnTxHash,
-              mintTxHash: updatedTransfer.mintTxHash,
-              message: updatedTransfer.message,
-              attestation: updatedTransfer.attestation,
-              sourceChain: updatedTransfer.sourceChain,
-              destinationChain: updatedTransfer.destinationChain,
-              amount: updatedTransfer.amount,
+              transferId: updatedTransfer!.id,
+              status: updatedTransfer!.status,
+              burnTxHash: updatedTransfer!.burnTxHash,
+              mintTxHash: updatedTransfer!.mintTxHash,
+              message: updatedTransfer!.message,
+              attestation: updatedTransfer!.attestation,
+              sourceChain: updatedTransfer!.sourceChain,
+              destinationChain: updatedTransfer!.destinationChain,
+              amount: updatedTransfer!.amount,
             };
           }
         } catch (error) {
@@ -379,9 +379,9 @@ class CCTPService {
     notify('burning', 'Initiating burn on source chain...');
     const initResult = await this.initiateBridge(userId, sourceChainKey, destChainKey, amount);
 
-    const transfer = userStore.getTransferById(initResult.transferId)!;
+    const transfer = await userStore.getTransferById(initResult.transferId);
     
-    if (!transfer.burnTxHash) {
+    if (!transfer || !transfer.burnTxHash) {
       throw new Error('Burn transaction hash not available');
     }
 
@@ -390,7 +390,7 @@ class CCTPService {
     const attestation = await this.waitForAttestation(transfer.burnTxHash, sourceChain.cctpDomain);
 
     const attestationData = attestation.messages[0];
-    userStore.updateTransfer(transfer.id, {
+    await userStore.updateTransfer(transfer.id, {
       status: 'ready_to_mint',
       message: attestationData.message,
       attestation: attestationData.attestation,
